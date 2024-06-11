@@ -1,0 +1,96 @@
+CREATE OR REPLACE PROCEDURE dev_acm_pcc.join_bedoccupancy()
+ LANGUAGE plpgsql
+AS $$
+DECLARE
+LAST_UPDATED Date;
+BEGIN
+
+  DROP TABLE IF EXISTS #src; 
+  DROP TABLE IF EXISTS #bo;
+  DROP TABLE IF EXISTS #temp1;
+
+ 
+  -- select last updated date from target table 
+  SELECT date into LAST_UPDATED FROM dev_acm_pcc.BedOccupancy order by date desc limit 1;
+
+  IF LAST_UPDATED IS NULL THEN
+      -- LAST_UPDATED := '2010-01-01';
+      SELECT min(date) INTO LAST_UPDATED FROM dev_acm_pcc.BedAvailable;
+  END IF;
+
+  RAISE NOTICE 'LAST_UPDATE: %',LAST_UPDATED; 
+
+  -- Create temp table for new records
+  -- get available and occupied data from bedOccupied and bedAvailable tables
+  -- select only newly inserted records based on last updated date
+  CREATE TEMP TABLE #temp1 AS
+    SELECT
+        a.Date,
+        a.BedID,
+        b.AdmissionID,
+        b.PayerPlanID,
+        COALESCE(b.Occupied, 0) AS Occupied,
+        a.Available,
+        NULL AS CareLevelId,
+        COALESCE(b.IsAdmitted, 0) AS IsAdmitted,
+        NULL AS IsReadmitted,
+        0 AS IsRental,
+        -- bp.bedpriceid AS BedPriceID,
+        -- bp.price AS Price,
+        0 AS BedPriceID,
+        0 AS Price,
+        'ACM' AS tenant
+    FROM
+        dev_acm_pcc.BedAvailable AS a -- BedAvailable table
+        LEFT JOIN dev_acm_pcc.BedOccupied AS b -- BedOccupied table
+        ON a.Date = b.Date AND a.BedID = b.BedID -- Joining BedAvailable and BedOccupied tables based on Date and BedID
+        -- left join dev_acm_pcc.bedprice bp on a.bedid=bp.bedid
+        WHERE a.Date > LAST_UPDATED;
+
+  CREATE TEMP TABLE #bo as
+  SELECT * from
+  (
+      SELECT 
+          *,
+          ROW_NUMBER() OVER (PARTITION BY bedid, date ORDER BY (SELECT NULL)) AS rn
+      FROM #temp1
+  ) as t
+  WHERE t.rn = 1;
+
+  -- Merge new records into bedOccupancy table
+  MERGE INTO dev_acm_pcc.BedOccupancy USING #bo
+  ON dev_acm_pcc.bedoccupancy.date = #bo.date and dev_acm_pcc.bedoccupancy.bedId = #bo.bedId and dev_acm_pcc.bedoccupancy.tenant = 'ACM'
+  WHEN MATCHED THEN -- if record with combination alrady exists update
+      UPDATE SET
+      tenant = 'ACM'
+  WHEN NOT MATCHED THEN -- insert if record doesn't exists
+    INSERT (Date, BedID, AdmissionID, PayerPlanID, Occupied, Available, CareLevelId, IsAdmitted, IsReadmitted, IsRental, BedPriceID, Price,tenant)
+    VALUES (#bo.Date, #bo.BedID, #bo.AdmissionID, #bo.PayerPlanID, #bo.Occupied, #bo.Available, NULL, #bo.IsAdmitted, NULL, #bo.IsRental, #bo.BedPriceID, #bo.Price, #bo.tenant);
+
+  -- Remove deleted beds 
+  SELECT DISTINCT b.bedid
+  INTO #src 
+  FROM dev_acm_pcc.bed b 
+  INNER JOIN "acm_pcc_db"."tbl_bed" tb ON  tb.bed_id = b.sourceid AND tb.deleted ='Y';
+
+  DELETE FROM dev_acm_pcc.BedOccupancy 
+  USING #src 
+  WHERE #src.bedid = dev_acm_pcc.bedoccupancy.bedid;
+
+  -- -- update the readmitted column for newly added rows
+  -- UPDATE dev_acm_pcc.BedOccupancy a
+  -- SET isReadmitted =   case 
+  --     when a.Occupied = 1 and b.AdmissionID is null and a.IsAdmitted = 0
+  --       then 1
+  --     else 0
+  --   end
+  -- FROM dev_acm_pcc.BedOccupancy b
+  -- WHERE b.Date = dateAdd(d, -1, a.Date) 
+  --   AND b.AdmissionID = a.AdmissionID
+  --   AND b.Date >= LAST_UPDATED
+  --   AND a.tenant = 'ACM';
+
+END;
+$$
+
+

@@ -1,0 +1,82 @@
+CREATE OR REPLACE PROCEDURE dev_acm_pcc.load_levelofcare()
+ LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Create a temporary table to hold the transformed data
+    CREATE TEMP TABLE temp_levelofcare AS 
+    SELECT 
+        sf.name,
+        CASE 
+            WHEN sf.name LIKE '%Residential Living%' THEN 'IL'
+            WHEN sf.name LIKE '%Assisted Living%' THEN 'AL'
+            WHEN sf.name LIKE '%Healthcare Center%' THEN 'SNF'
+            ELSE NULL 
+        END AS levelofcare,
+        sf.fac_id::integer AS sourceid,  -- Ensure sourceid is of type integer
+        f.facilityid AS campusid,        -- Ensure campusid is of type integer
+        CURRENT_DATE AS fromdate,
+        '9999-12-31'::date AS todate,
+        'ACM' AS tenant
+    FROM 
+        dev.acm_pcc_db.tbl_acm_facility sf
+    LEFT JOIN 
+        dev.dev_acm_pcc.pcc_facility f 
+    ON 
+        sf.facility_code = f.facilitycode;
+
+    -- Filter out rows with NULL campusid
+    DELETE FROM temp_levelofcare WHERE campusid IS NULL;
+
+    -- Merge data from temporary table into the target table
+    MERGE INTO dev.dev_acm_pcc.levelofcare
+    USING temp_levelofcare
+    ON dev.dev_acm_pcc.levelofcare.sourceid = temp_levelofcare.sourceid
+       AND dev.dev_acm_pcc.levelofcare.fac_id = temp_levelofcare.campusid
+       AND dev.dev_acm_pcc.levelofcare.tenant = temp_levelofcare.tenant
+    WHEN MATCHED THEN
+        UPDATE SET
+            fromdate = temp_levelofcare.fromdate,
+            todate = temp_levelofcare.todate,
+            levelofcarename = temp_levelofcare.name,
+            levelofcareshortname = temp_levelofcare.levelofcare,
+            levelofcareabbreviation = temp_levelofcare.levelofcare,
+            levelofcaredescription = temp_levelofcare.name,
+            fac_id = temp_levelofcare.campusid,
+            sourcetable = 'tbl_acm_facility',
+            sourcecolumn = 'name',
+            sourcesystem = 'ACM',
+            tenant = temp_levelofcare.tenant
+    WHEN NOT MATCHED THEN
+        INSERT (
+            fromdate,
+            todate,
+            levelofcarename,
+            levelofcareshortname,
+            levelofcareabbreviation,
+            fac_id,
+            sourceid,
+            sourcetable,
+            sourcecolumn,
+            sourcesystem,
+            tenant
+        )
+        VALUES (
+            temp_levelofcare.fromdate,
+            temp_levelofcare.todate,
+            temp_levelofcare.name,
+            temp_levelofcare.levelofcare,
+            temp_levelofcare.levelofcare,
+            temp_levelofcare.campusid,
+            temp_levelofcare.sourceid,
+            'tbl_acm_facility',
+            'name',
+            'ACM',
+            temp_levelofcare.tenant
+        );
+
+    -- Drop the temporary table
+    DROP TABLE IF EXISTS temp_levelofcare;
+END;
+$$
+
+

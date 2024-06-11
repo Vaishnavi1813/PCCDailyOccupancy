@@ -1,0 +1,96 @@
+CREATE OR REPLACE PROCEDURE dev_acm_pcc.load_bed()
+ LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Create the target table if it doesn't exist
+    CREATE TABLE IF NOT EXISTS dev_acm_pcc.bed (
+        bedid integer NOT NULL identity(1, 1) ENCODE az64,
+        fromdate date NOT NULL DEFAULT CURRENT_DATE ENCODE az64,
+        todate date NOT NULL DEFAULT '9999-12-31'::date ENCODE az64,
+        bedname character varying(255) NOT NULL ENCODE lzo,
+        bedshortname character varying(255) ENCODE lzo,
+        bed_desc character varying(65535) ENCODE lzo,
+        roomid integer ENCODE az64,
+        deleted character varying(255) NOT NULL ENCODE lzo,
+        sourceid character varying(255) NOT NULL ENCODE lzo,
+        sourcetable character varying(255) DEFAULT 'tbl_acm_bed' ENCODE lzo,
+        sourcesystem character varying(255) DEFAULT 'PCC' ENCODE lzo,
+        tenant character varying(255) DEFAULT 'ACM' ENCODE lzo,
+        issecondperson integer NOT NULL DEFAULT 0 ENCODE az64,
+        UNIQUE (bedid)
+    ) DISTSTYLE AUTO;
+
+    -- Create a temporary table to hold the transformed data
+    CREATE TEMP TABLE temp_bed AS
+    SELECT
+        bs.bed_id AS sourceid,
+        bs.deleted,
+        r.roomid,
+        bs.bed_desc AS bedname,
+        bs.bed_desc AS bedshortname,
+        bs.bed_desc,
+        CURRENT_DATE AS fromdate,
+        '9999-12-31'::date AS todate,
+        'tbl_acm_bed' AS sourcetable,
+        'PCC' AS sourcesystem,
+        'ACM' AS tenant
+    FROM
+        dev.acm_pcc_db.tbl_acm_bed bs
+    LEFT JOIN dev_acm_pcc.room r 
+    ON r.sourceid = bs.room_id;
+
+    --select count(distinct(sourceid)) from temp_bed;
+
+    -- Merge data from temporary table into the target table
+    MERGE INTO dev_acm_pcc.bed
+    USING temp_bed
+    ON dev_acm_pcc.bed.sourceid = temp_bed.sourceid
+    WHEN MATCHED THEN
+        UPDATE SET
+            fromdate = temp_bed.fromdate,
+            todate = temp_bed.todate,
+            bedname = temp_bed.bedname,
+            bedshortname = temp_bed.bedshortname,
+            bed_desc = temp_bed.bed_desc,
+            roomid = temp_bed.roomid,
+            deleted = temp_bed.deleted,
+            sourcetable = temp_bed.sourcetable,
+            sourcesystem = temp_bed.sourcesystem,
+            tenant = temp_bed.tenant,
+            issecondperson = 0  -- Default value
+    WHEN NOT MATCHED THEN
+        INSERT (
+            fromdate,
+            todate,
+            bedname,
+            bedshortname,
+            bed_desc,
+            roomid,
+            deleted,
+            sourceid,
+            sourcetable,
+            sourcesystem,
+            tenant,
+            issecondperson
+        )
+        VALUES (
+            temp_bed.fromdate,
+            temp_bed.todate,
+            temp_bed.bedname,
+            temp_bed.bedshortname,
+            temp_bed.bed_desc,
+            temp_bed.roomid,
+            temp_bed.deleted,
+            temp_bed.sourceid,
+            temp_bed.sourcetable,
+            temp_bed.sourcesystem,
+            temp_bed.tenant,
+            0  -- Default value
+        );
+
+    -- Drop the temporary table
+    DROP TABLE IF EXISTS temp_bed;
+END;
+$$
+
+

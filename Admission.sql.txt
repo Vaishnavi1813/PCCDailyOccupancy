@@ -1,0 +1,142 @@
+CREATE OR REPLACE PROCEDURE dev_acm_pcc.load_admission()
+ LANGUAGE plpgsql
+AS $$
+BEGIN
+
+drop table if exists #src;
+
+select distinct 
+    isnull(m.first_name||' '||m.middle_name||' '||m.last_name, 'unspecified')       admissionname,
+    cast(c.admission_date as varchar)                                               admissiondate,
+    r.residentid,
+    cast(c.discharge_date as varchar)                   dischargedate,
+    AdmitToFromID                                       admissionfromlocationid,
+    AdmitToFromID                                       admissionlocationtypeid,
+    AdmitDischargeLocationID                            dischargetolocationid,
+    AdmitDischargeLocationID                            dischargelocationtypeid,
+    cast(c.admission_date as varchar)                   fromdate,
+    cast(c.discharge_date as varchar)                   todate,
+    e.entityid,
+    f.facilityid,
+    ca.campusid,
+    bu.buildingid,
+    c.client_id                                         sourceid,
+    'tbl_clients'                                       sourcetable,
+    'client_id'                                         sourcecolumn,
+    'pcc'                                               sourcesystem,
+    'load_admission'                                    createdby,
+    GETDATE()                                           createddate,
+    'dev_acm_pcc.load_admission()'                      createdbyscript,
+    lc.levelofcareid,
+    'ACM'                                               tenant
+into #src
+from acm_pcc_db."tbl_clients" c
+inner join acm_pcc_db."tbl_acm_mpi" m on c.mpi_id=m.mpi_id
+left join dev_acm_pcc.resident r on r.sourceid=c.mpi_id and m.first_name = r.FirstName and  m.middle_name = r.MiddleName and m.last_name = r.LastName
+left join dim.campus ca on c.fac_id=ca.sourceid
+left join dev_acm_pcc.levelofcare lc on lc.campusid=ca.campusid
+left join acm_pcc_db."tbl_census_item" cit on cit.census_id = c.current_census_id  and cit.deleted='N' and c.client_id= cit.client_id
+left join dev_acm_pcc.bed b on b.sourceid=cit.bed_id
+left join dev_acm_pcc.room ro on b.roomid =ro.roomid
+left join dev_acm_pcc.building bu on ro.buildingid = bu.buildingid
+left join dim.building_mapping bm on bm.sourceid = bu.sourceid
+left join dev_acm_pcc.facility f on bm.facilityid = f.facilityid
+left join dev_acm_pcc.entity e on f.entityid = e.entityid
+left join (
+    SELECT ci.census_id         AS CensusID,
+        ci.fac_id               AS FacilityID,  
+        ci.client_id            AS PatientID,  
+        ci.bed_id               AS BedID,  
+        ci.effective_date       AS BeginEffectiveDate,  
+        ci.ineffective_date     AS EndEffectiveDate,  
+        ci.primary_payer_id     AS PayerID,  
+        cp2.payer_id            AS SecondPayerID,  
+        cp3.payer_id            AS ThirdPayerID,  
+        cp4.payer_id            AS FourthPayerID,  
+        cp5.payer_id            AS FifthPayerID,  
+        ci.rugs_code            AS CareLevelCode,  
+        ci.alternate_care_level AS AlternateCareLevelCode,  
+        ci.status_code_id       AS StatusCodeID,  
+        ci.action_code_id       AS ActionCodeID,  
+        CASE WHEN cast(case when adt_tofrom_loc_id='' then '0' else adt_tofrom_loc_id end as numeric) < 0 THEN cast(case when adt_tofrom_loc_id='' then '0' else adt_tofrom_loc_id end as numeric) * -1 ELSE cast(case when adt_tofrom_loc_id='' then '0' else adt_tofrom_loc_id end as numeric) END AS AdmitDischargeLocationID,  
+        CASE WHEN cast(case when adt_tofrom_loc_id='' then '0' else adt_tofrom_loc_id end as numeric) < 0 THEN eef.name ELSE cc1.item_description END AS AdmitDischargeLocation,    
+        cc.item_description     AS AdmitDischargeLocationType,  
+        ci.Created_date         AS CreatedDate,  
+        ci.revision_date        AS Revisiondate,  
+        ci.outpatient_status    AS OutPatientStatus,  
+        ci.hospital_stay_from   AS HospitalStayFrom,  
+        ci.hospital_stay_to     AS HospitalStayTo,  
+        ci.adt_tofrom_loc_id    as AdmitToFromID,  
+        ci.admission_type       as AdmissionType,  
+        ci.admission_source     as AdmissionSource,  
+        ci.prior_medicare_days  AS PriorMedicareDays
+    FROM acm_pcc_db.tbl_acm_census_item ci   
+    LEFT JOIN acm_pcc_db.tbl_acm_census_payer_info cp2 ON cp2.census_id = ci.census_id AND cp2.payer_rank = 2  
+    LEFT JOIN acm_pcc_db.tbl_acm_census_payer_info cp3 ON cp3.census_id = ci.census_id AND cp3.payer_rank = 3  
+    LEFT JOIN acm_pcc_db.tbl_acm_census_payer_info cp4 ON cp4.census_id = ci.census_id AND cp4.payer_rank = 4  
+    LEFT JOIN acm_pcc_db.tbl_acm_census_payer_info cp5 ON cp5.census_id = ci.census_id AND cp5.payer_rank = 5  
+    LEFT JOIN acm_pcc_db.tbl_acm_common_code cc ON cc.item_id = ci.adt_tofrom_id AND cc.item_code='admit'  
+    LEFT JOIN acm_pcc_db.tbl_acm_common_code cc1 ON cc1.item_id = ci.adt_tofrom_loc_id  
+    LEFT JOIN acm_pcc_db.tbl_acm_emc_ext_facilities eef  ON (cast(case when adt_tofrom_loc_id='' then '0' else adt_tofrom_loc_id end as numeric) * -1) = eef.ext_fac_id  
+    WHERE (ci.deleted IS NULL OR ci.deleted = 'N') AND --ISNULL(ci.deleted,'N') = 'N' AND   
+    (ci.record_type IS NULL OR ci.record_type = 'C') --ISNULL(ci.record_type, 'C')='C'  
+) as pc on pc.PatientID = c.client_id
+where  admissiondate is not null and c.deleted != 'Y';
+
+truncate table dev_acm_pcc.admission;
+
+insert into dev_acm_pcc.admission(
+    admissionname,
+    admissiondate,
+    residentid,
+    dischargedate,
+    admissionfromlocationid,
+    admissionlocationtypeid,
+    dischargetolocationid,
+    dischargelocationtypeid,
+    fromdate,
+    todate,
+    entityid,
+    facilityid,
+    campusid,
+    buildingid,
+    sourceid,
+    sourcetable,
+    sourcecolumn,
+    sourcesystem,
+    createdby,
+    createddate,
+    createdbyscript,
+    levelofcareid,
+    tenant
+)(
+select
+    #src.admissionname,
+    #src.admissiondate,
+    #src.residentid,
+    #src.dischargedate,
+    #src.admissionfromlocationid,
+    #src.admissionlocationtypeid,
+    #src.dischargetolocationid,
+    #src.dischargelocationtypeid,
+    #src.fromdate,
+    #src.todate,
+    #src.entityid,
+    #src.facilityid,
+    #src.campusid,
+    #src.buildingid,
+    #src.sourceid,
+    #src.sourcetable,
+    #src.sourcecolumn,
+    #src.sourcesystem,
+    #src.createdby,
+    #src.createddate,
+    #src.createdbyscript,
+    #src.levelofcareid,
+    #src.tenant  
+from #src
+);
+END;
+$$
+
+

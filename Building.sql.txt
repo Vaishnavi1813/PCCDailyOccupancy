@@ -1,0 +1,74 @@
+CREATE OR REPLACE PROCEDURE dev_acm_pcc.load_building()
+ LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Create a temporary table to hold the transformed data
+    CREATE TEMP TABLE temp_building AS 
+    SELECT
+        fl.floor_desc AS buildingname,
+        f.facilityid::integer AS fac_id,
+        lc.levelofcareid,
+        floor_id::integer as sourceid,
+        CURRENT_DATE AS fromdate,
+        '9999-12-31'::date AS todate,
+        'ACM' AS tenant,
+        'acm_pcc_db.tbl_floor' AS sourcetable,
+        'PCC' AS sourcesystem
+    FROM
+        dev.acm_pcc_db.tbl_floor fl
+    LEFT JOIN 
+        dev_acm_pcc.pcc_facility f 
+    ON 
+        fl.fac_id = f.sourceid
+    LEFT JOIN 
+        dev_acm_pcc.levelofcare lc
+    ON 
+        f.facilityid = lc.fac_id;
+
+    -- Merge data from temporary table into the target table
+    MERGE INTO dev_acm_pcc.building
+    USING temp_building
+    ON dev_acm_pcc.building.buildingname = temp_building.buildingname  -- Match based on buildingname
+    WHEN MATCHED THEN
+        UPDATE SET
+            fromdate = temp_building.fromdate,
+            todate = temp_building.todate,
+            levelofcareid = temp_building.levelofcareid,
+            fac_id = temp_building.fac_id,  
+            sourcetable = temp_building.sourcetable,
+            sourcesystem = temp_building.sourcesystem,
+            tenant = temp_building.tenant
+    WHEN NOT MATCHED THEN
+        INSERT (
+            fromdate,
+            todate,
+            buildingname,
+            buildingshortname,
+            buildingdescription,
+            levelofcareid,
+            fac_id,
+            sourceid,
+            sourcetable,
+            sourcesystem,
+            tenant
+        )
+        VALUES (
+            temp_building.fromdate,
+            temp_building.todate,
+            temp_building.buildingname,
+            temp_building.buildingname,  
+            temp_building.buildingname,  
+            temp_building.levelofcareid,
+            temp_building.fac_id,  
+            temp_building.sourceid,
+            temp_building.sourcetable,
+            temp_building.sourcesystem,
+            temp_building.tenant
+        );
+
+    -- Drop the temporary table
+    DROP TABLE IF EXISTS temp_building;
+END;
+$$
+
+

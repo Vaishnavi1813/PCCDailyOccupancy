@@ -1,0 +1,56 @@
+CREATE
+OR REPLACE VIEW "dev_acm_pcc"."factbudgetoccupancyperday_v2" AS
+SELECT
+   to_char(
+      to_date(
+         bo.startdate:: text,
+         'DD-MM-YYYY':: character varying:: text
+      ):: timestamp without time zone,
+      'dd/MM/YYYY':: character varying:: text
+   ) || bo.buildingid:: character varying:: text AS datebuildingkey,
+   to_date(
+      bo.startdate:: text,
+      'DD-MM-YYYY':: character varying:: text
+   ) AS date,
+   bo.buildingid,
+   bo.budgetresidentdaysperday AS residentdaysbudget,
+   bo.budgetavailableperday AS inservicedaysbudget,
+   (
+      COALESCE(bld.buildingname, 'missing ':: character varying):: text || '-':: character varying:: text
+   ) || bld.buildingid:: character varying:: text AS buildingdescription,
+   e.entitycode,
+   loc.levelofcareabbreviation AS levelofcare,
+   f.facilitycode,
+   bld.buildingname,
+   f.facilityname AS campusname
+FROM
+   dev_acm_pcc.budgetoccupancy bo
+   JOIN dev_acm_pcc.building bld ON bld.buildingid = bo.buildingid
+   JOIN dev_acm_pcc.pcc_facility f ON f.facilityid = bo.facilityid
+   JOIN dev_acm_pcc.levelofcare loc ON loc.levelofcareid = bld.levelofcareid
+   JOIN dev_acm_pcc.entity e ON e.entityid = bo.entityid
+   JOIN dev_acm_pcc.building bs ON bs.sourceid = f.sourceid
+WHERE
+   "date_part"(
+      'year':: character varying:: text,
+      to_date(
+         bo.startdate:: text,
+         'DD-MM-YYYY':: character varying:: text
+      )
+   ) >= (
+      "date_part"(
+         'year':: character varying:: text,
+         'now':: character varying:: date
+      ) - 5
+   )
+   OR to_date(
+      bo.startdate:: text,
+      'DD-MM-YYYY':: character varying:: text
+   ) < 'now':: character varying:: date
+ORDER BY
+   to_date(
+      bo.startdate:: text,
+      'DD-MM-YYYY':: character varying:: text
+   ),
+   bo.buildingid;
+

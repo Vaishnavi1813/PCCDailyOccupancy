@@ -1,0 +1,108 @@
+CREATE OR REPLACE PROCEDURE dev_acm_pcc.load_resident()
+ LANGUAGE plpgsql
+AS $_$
+BEGIN
+    -- Drop the temporary table if it exists
+    DROP TABLE IF EXISTS temp_src;
+
+    -- Create the temporary table with the required structure
+    CREATE TEMP TABLE temp_src AS
+    SELECT
+        current_date AS fromdate,
+        CAST('9999-12-31' AS DATE) AS todate,
+        m.first_name AS FirstName,
+        m.middle_name AS MiddleName,
+        m.last_name AS LastName,
+        REPLACE(
+            COALESCE(m.last_name || ', ', '') || 
+            COALESCE(m.first_name || ' ', '') || 
+            COALESCE(m.middle_name || ' ', ''),
+            '  ', ' '
+        ) AS FullName,
+        CASE
+            WHEN m.date_of_birth IS NULL OR m.date_of_birth = 0 OR NOT (m.date_of_birth::TEXT ~ '^[0-9]+$') THEN NULL
+            ELSE to_timestamp((m.date_of_birth / 1000000)::TEXT, 'YYYY-MM-DD HH24:MI:SS')
+        END AS BirthDate,
+        m.sex AS Sex,
+        m.place_of_birth AS birthplace,
+        m.occupations AS Occupation,
+        m.maiden_name AS maidenname,
+        m.marital_status_id AS maritalstatustype,
+        m.mpi_id AS sourceid,
+        'tbl_mpi' AS sourcetable,
+        'mpi_id' AS sourcecolumn,
+        'pcc' AS sourcesystem,
+        m.created_by AS CreatedBy,
+        'ACM' AS tenant
+    FROM "dev"."acm_pcc_db"."tbl_acm_mpi" m
+    INNER JOIN (
+        SELECT DISTINCT mpi_id
+        FROM "dev"."acm_pcc_db"."tbl_acm_clients"
+    ) cl ON cl.mpi_id = m.mpi_id
+    GROUP BY 
+        m.first_name,
+        m.middle_name,
+        m.last_name,
+        m.sex,
+        m.place_of_birth,
+        m.date_of_birth,
+        m.occupations,
+        m.maiden_name,
+        m.marital_status_id,
+        m.mpi_id,
+        m.created_by;
+
+    -- Perform the MERGE operation
+    MERGE INTO dev_acm_pcc.resident
+    USING temp_src
+    ON (
+        temp_src.sourceid = dev_acm_pcc.resident.sourceid
+        AND temp_src.tenant = dev_acm_pcc.resident.tenant
+    )
+    WHEN MATCHED THEN
+    UPDATE SET
+        tenant = temp_src.tenant
+    WHEN NOT MATCHED THEN
+    INSERT (
+        fromdate,
+        todate,
+        FirstName,
+        MiddleName,
+        LastName,
+        FullName,
+        birthdate,
+        Sex,
+        birthplace,
+        Occupation,
+        maidenname,
+        maritalstatustype,
+        sourceid,
+        sourcetable,
+        sourcecolumn,
+        sourcesystem,
+        CreatedBy,
+        tenant
+    )
+    VALUES (
+        temp_src.fromdate,
+        temp_src.todate,
+        temp_src.FirstName,
+        temp_src.MiddleName,
+        temp_src.LastName,
+        temp_src.FullName,
+        temp_src.BirthDate,
+        temp_src.Sex,
+        temp_src.birthplace,
+        temp_src.Occupation,
+        temp_src.maidenname,
+        temp_src.maritalstatustype,
+        temp_src.sourceid,
+        temp_src.sourcetable,
+        temp_src.sourcecolumn,
+        temp_src.sourcesystem,
+        temp_src.CreatedBy,
+        temp_src.tenant
+    );
+END;
+$_$
+

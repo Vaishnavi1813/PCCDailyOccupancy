@@ -1,0 +1,25 @@
+CREATE
+OR REPLACE VIEW "dev_acm_pcc"."vwbed" AS
+SELECT
+   loc.campusid,
+   c.entityid,
+   c.facilityid,
+   loc.levelofcareid,
+   loc.levelofcareabbreviation,
+   b.buildingid,
+   r.roomid,
+   bed.bedid,
+   bed.sourceid AS bedorgentsys,
+   c.facilityname AS campusname,
+   loc.levelofcarename,
+   b.buildingname,
+   r.roomname,
+   bed.bedname,
+   bed.issecondperson
+FROM
+   dev_acm_pcc.pcc_facility c
+   JOIN dev_acm_pcc.building b ON b.fac_id = c.facilityid
+   JOIN dev_acm_pcc.levelofcare loc ON loc.levelofcareid:: character varying:: text = b.levelofcareid:: character varying:: text
+   JOIN dev_acm_pcc.room r ON r.buildingid = b.buildingid
+   JOIN dev_acm_pcc.bed ON bed.roomid = r.roomid;
+

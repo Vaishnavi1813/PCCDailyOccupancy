@@ -1,0 +1,86 @@
+CREATE OR REPLACE PROCEDURE dev_acm_pcc.update_bedoccupancy()
+ LANGUAGE plpgsql
+AS $$
+
+BEGIN
+
+drop table if exists #temp1; 
+drop table if exists #temp2;
+drop table if exists #temp3;
+drop table if exists #temp4;
+
+SELECT
+    bo.date,
+    bo.bedId,
+    bo.admissionId,
+    bo.occupied,
+    bo.Available,
+MIN(date) OVER (PARTITION BY bedId, admissionId, Available, occupied) AS grp
+into #temp1
+FROM  dev_acm_pcc.BedOccupancy bo ;
+
+SELECT
+    date,
+    bedId,
+    AdmissionID,
+    occupied,
+    Available,
+    DENSE_RANK() OVER (ORDER BY grp) AS grouping
+    into #temp2
+FROM 
+    #temp1 as  t;
+
+drop table if exists #temp1; 
+
+ SELECT
+        date,
+        bedID,
+        AdmissionID,
+        CASE WHEN occupied = 1 AND Available = 1 THEN 1 ELSE 0 END AS occupied,
+        Available,
+        CASE WHEN occupied = 0 AND Available = 1 THEN 1 ELSE 0 END AS vacant,
+        SUM(occupied) OVER (PARTITION BY bedID, grouping ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS OccupancyDays,
+        SUM(CASE WHEN occupied = 0 AND Available = 1 THEN 1 ELSE 0 END) OVER (PARTITION BY bedID, grouping ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS VacancyDays,
+        SUM(CASE WHEN Available = 0 THEN 1 ELSE 0 END) OVER (PARTITION BY bedID, grouping ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS OutOfServiceDays
+    into #temp3
+    FROM #temp2 as bo;
+
+drop table if exists #temp2;
+
+CREATE TEMP TABLE #temp4 as
+SELECT * from
+(
+    SELECT 
+        *,
+        ROW_NUMBER() OVER (PARTITION BY bedid, date ORDER BY (SELECT NULL)) AS rn
+    FROM #temp3
+) as t
+WHERE t.rn = 1;
+
+drop table if exists #temp3; 
+
+-- SELECT count(*) as count, date, bedid, AdmissionID FROM #temp3 group by date, bedid, AdmissionID having count > 1 order by count desc;
+-- select * FROM wcf_pcc.bedOccupied where bedid = 231311 and admissionid= 712177 order by date;
+-- Insert final date into bed available
+
+MERGE INTO dev_acm_pcc.BedOccupancy USING #temp4
+    ON #temp4.date = dev_acm_pcc.BedOccupancy.date 
+    and #temp4.bedid = dev_acm_pcc.BedOccupancy.bedid 
+    -- and #temp4.AdmissionID = dev_acm_pcc.BedOccupancy.AdmissionID 
+WHEN MATCHED THEN-- only updating so no need to use merge concept
+UPDATE SET 
+    occupied = #temp4.occupied,
+    vacant = #temp4.vacant,
+    OccupancyDays = #temp4.OccupancyDays,
+    VacancyDays = #temp4.VacancyDays,
+    OutOfServiceDays = #temp4.OutOfServiceDays
+WHEN NOT MATCHED THEN -- insert if record doesn't exists
+    INSERT (Date, BedID, AdmissionID, Occupied, Available, vacant, OccupancyDays, VacancyDays, OutOfServiceDays, isadmitted)
+    VALUES (#temp4.Date, #temp4.BedID, #temp4.AdmissionID, #temp4.Occupied, #temp4.Available, #temp4.vacant, #temp4.OccupancyDays, #temp4.VacancyDays, #temp4.OutOfServiceDays, 10);
+
+drop table if exists #temp4; 
+
+END;
+$$
+
+

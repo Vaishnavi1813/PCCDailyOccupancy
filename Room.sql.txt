@@ -1,0 +1,89 @@
+CREATE OR REPLACE PROCEDURE dev_acm_pcc.load_room()
+ LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Create the target table if it doesn't exist
+    CREATE TABLE IF NOT EXISTS dev_acm_pcc.room (
+        roomid integer NOT NULL identity(1, 1) ENCODE az64,
+        fromdate date NOT NULL DEFAULT CURRENT_DATE ENCODE az64,
+        todate date NOT NULL DEFAULT '9999-12-31'::date ENCODE az64,
+        roomname character varying(255) NOT NULL ENCODE lzo,
+        roomshortname character varying(255) ENCODE lzo,
+        roomdescription character varying(65535) ENCODE lzo,
+        buildingid integer ENCODE az64,
+        unit_id integer ENCODE az64,
+        sourceid character varying(255) ENCODE lzo,
+        sourcetable character varying(255) DEFAULT 'tbl_acm_room' ENCODE lzo,
+        sourcesystem character varying(255) DEFAULT 'PCC' ENCODE lzo,
+        tenant character varying(255) DEFAULT 'ACM' ENCODE lzo
+    ) DISTSTYLE AUTO;
+
+    -- Create a temporary table to hold the transformed data
+    CREATE TEMP TABLE temp_room AS
+    SELECT
+        rs.room_desc AS roomname,
+        rs.room_desc AS roomshortname,
+        rs.room_desc AS roomdescription,
+        b.buildingid,
+        NULL:: integer AS unit_id,
+        rs.room_id AS sourceid,
+        CURRENT_DATE AS fromdate,
+        '9999-12-31'::date AS todate,
+        'tbl_acm_room' AS sourcetable,
+        'PCC' AS sourcesystem,
+        'ACM' AS tenant
+    FROM
+        dev.acm_pcc_db.tbl_acm_room rs
+    LEFT JOIN dev_acm_pcc.building b 
+    ON b.sourceid = rs.floor_id;
+
+    -- Merge data from temporary table into the target table
+    MERGE INTO dev_acm_pcc.room
+    USING temp_room
+    ON dev_acm_pcc.room.sourceid = temp_room.sourceid
+    WHEN MATCHED THEN
+        UPDATE SET
+            fromdate = temp_room.fromdate,
+            todate = temp_room.todate,
+            roomname = temp_room.roomname,
+            roomshortname = temp_room.roomshortname,
+            roomdescription = temp_room.roomdescription,
+            buildingid = temp_room.buildingid,
+            unit_id = temp_room.unit_id::integer,
+            sourcetable = temp_room.sourcetable,
+            sourcesystem = temp_room.sourcesystem,
+            tenant = temp_room.tenant
+    WHEN NOT MATCHED THEN
+        INSERT (
+            fromdate,
+            todate,
+            roomname,
+            roomshortname,
+            roomdescription,
+            buildingid,
+            unit_id,
+            sourceid,
+            sourcetable,
+            sourcesystem,
+            tenant
+        )
+        VALUES (
+            temp_room.fromdate,
+            temp_room.todate,
+            temp_room.roomname,
+            temp_room.roomshortname,
+            temp_room.roomdescription,
+            temp_room.buildingid,
+            temp_room.unit_id,
+            temp_room.sourceid,
+            temp_room.sourcetable,
+            temp_room.sourcesystem,
+            temp_room.tenant
+        );
+
+    -- Drop the temporary table
+    DROP TABLE IF EXISTS temp_room;
+END;
+$$
+
+

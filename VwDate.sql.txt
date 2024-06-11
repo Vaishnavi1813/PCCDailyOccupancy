@@ -1,0 +1,34 @@
+CREATE
+OR REPLACE VIEW "dev_acm_pcc"."vwdate" AS
+SELECT
+    acm_datetable.date,
+    acm_datetable.calendardayofmonth AS "day",
+    acm_datetable.weekdayname AS weekday,
+    acm_datetable.calendaryear AS "year",
+    acm_datetable.calendarmonth AS "month",
+    acm_datetable.calendarmonthnamelong AS monthname,
+    acm_datetable.calendarquarter AS quarter,
+    acm_datetable.dateid AS _dateserial,
+    acm_datetable.calendaryear * 12 + acm_datetable.calendarmonth AS _monthserial,
+    acm_datetable.calendaryear * 4 + acm_datetable.calendarquarter AS _quarterserial,
+    acm_datetable.isoyearweekno AS _weekserial,
+    CASE
+    WHEN acm_datetable.date > 'now':: character varying:: date THEN 1
+    ELSE 0 END AS _qvc_calendar_dateisfuture,
+    (
+        acm_datetable.calendaryear:: character varying:: text || '-':: character varying:: text
+    ) || lpad(
+        acm_datetable.calendarmonth:: character varying:: text,
+        2,
+        '0':: character varying:: text
+    ) AS "year-month",
+    (
+        acm_datetable.calendaryear:: character varying:: text || '-Q':: character varying:: text
+    ) || acm_datetable.calendarquarter:: character varying:: text AS "year-quarter"
+FROM
+    dev_acm_pcc.acm_datetable
+WHERE
+    acm_datetable.date > '2023-01-02':: date
+ORDER BY
+    acm_datetable.date;
+

@@ -1,0 +1,172 @@
+CREATE OR REPLACE PROCEDURE dev_acm_pcc.load_census()
+ LANGUAGE plpgsql
+AS $_$
+BEGIN
+    -- Truncate the table
+    TRUNCATE TABLE dev_acm_pcc.census;
+
+    -- Drop temporary table if it exists
+    DROP TABLE IF EXISTS temp_leave;
+
+    -- Create temporary table with valid numeric data
+    CREATE TEMPORARY TABLE temp_leave AS
+    SELECT 
+        dt.date,
+        a.admissionId,
+        a.ResidentID,
+        vc.bedId,
+        'Leave' AS status,
+        0 AS admissionInd,
+        a.admissionName,
+        LEFT('', 25) AS LeaveType,
+        NULL::VARCHAR(25) AS PayerPlanId,
+        0 AS Billable,
+        0 AS Hold,
+        '1970-01-01 00:00:00'::timestamp + (NULLIF(regexp_replace(ect.hospital_stay_to, '[^0-9]', ''), '')::bigint / 1000000) * interval '1 second' AS EstCompletionDate,
+        vc.admitdischargelocationtype AS LocationToTypeId,
+        vc.admitdischargelocationid AS locationId,
+        NULL::timestamp AS EvacuationCategoryDescription,
+        ('1970-01-01 00:00:00'::timestamp + (NULLIF(regexp_replace(ect.hospital_stay_from, '[^0-9]', ''), '')::bigint / 1000000) * interval '1 second')::date AS startDate,
+        COALESCE(('1970-01-01 00:00:00'::timestamp + (NULLIF(regexp_replace(ect.hospital_stay_to, '[^0-9]', ''), '')::bigint / 1000000) * interval '1 second'), current_date)::date AS endDate,
+        NULL::VARCHAR AS entityId,
+        0 AS IsReadmitted
+    FROM dev_acm_pcc.Admission a
+    LEFT JOIN acm_pcc_db.tbl_acm_census_item ect ON ect.admission_source = a.sourceId
+    LEFT JOIN dev_acm_pcc.view_census vc ON vc.censusid = ect.census_id
+    LEFT JOIN dim.acm_DateTable dt ON dt.date BETWEEN 
+        ('1970-01-01 00:00:00'::timestamp + (NULLIF(regexp_replace(ect.hospital_stay_from, '[^0-9]', ''), '')::bigint / 1000000) * interval '1 second') AND 
+        COALESCE(('1970-01-01 00:00:00'::timestamp + (NULLIF(regexp_replace(ect.hospital_stay_to, '[^0-9]', ''), '')::bigint / 1000000) * interval '1 second'), current_date)
+    WHERE 
+        regexp_replace(ect.hospital_stay_to, '[^0-9]', '') ~ '^[0-9]+$' AND
+        regexp_replace(ect.hospital_stay_from, '[^0-9]', '') ~ '^[0-9]+$';
+
+    -- Insert into main census table
+    INSERT INTO dev_acm_pcc.Census (
+        date,
+        admissionId,
+        ResidentID,
+        BedId,
+        Status,
+        AdmissionInd,
+        AdmissionName,
+        LeaveType,
+        PayerPlanId,
+        Billable,
+        Hold,
+        EstCompletionDate,
+        LocationToTypeId,
+        LocationId,
+        EvacuationCategoryDescription,
+        startDate,
+        endDate,
+        entityId,
+        IsReadmitted
+    )
+    SELECT 
+        temp_leave.date,
+        x.admissionId,
+        x.ResidentID,
+        x.BedId,
+        CASE 
+            WHEN x.DischargeDate IS NOT NULL AND x.DischargeDate::DATE = temp_leave.date THEN 'Discharge'
+            WHEN x.AdmissionDate = '1900-01-01' AND x.FromDate = temp_leave.date THEN 'Active'
+            WHEN x.AdmissionDate = temp_leave.date THEN 'Active'
+            ELSE 'Active'
+        END AS Status,
+        0 AS AdmissionInd,
+        x.AdmissionName,
+        x.LeaveType,
+        x.PayerPlanId,
+        x.Billable,
+        x.Hold,
+        CAST(x.EstCompletionDate AS timestamp) AS EstCompletionDate,
+        x.LocationToTypeId,
+        x.LocationId,
+        CAST(x.EvacuationCategoryDescription AS timestamp) AS EvacuationCategoryDescription,
+        CAST(x.startDate AS date) AS startDate,
+        CAST(x.endDate AS date) AS endDate,
+        x.entityId,
+        0 AS IsReadmitted
+    FROM (
+        SELECT 
+            a.admissionId,
+            a.ResidentID,
+            NULL::VARCHAR AS BedId,
+            NULL::VARCHAR AS Status,
+            a.AdmissionDate,
+            a.FromDate,
+            a.DischargeDate,
+            a.AdmissionName,
+            CAST(NULL AS VARCHAR) AS LeaveType,
+            NULL::VARCHAR AS PayerPlanId,
+            1 AS Billable,
+            1 AS Hold,
+            a.entityid,
+            NULL AS EstCompletionDate,
+            NULL AS LocationToTypeId,
+            NULL AS LocationId,
+            NULL AS EvacuationCategoryDescription,
+            NULL::DATE AS startDate,
+            NULL::DATE AS endDate
+        FROM dev_acm_pcc.Admission a
+        LEFT JOIN acm_pcc_db.tbl_acm_bp_episode e ON e.episode_id = a.SourceID
+    ) AS x
+    JOIN temp_leave ON temp_leave.admissionId = x.admissionId;
+
+    -- Insert from temporary table
+    -- Insert from temporary table with length validation
+INSERT INTO dev_acm_pcc.census
+SELECT 
+    date,
+    admissionId,
+    ResidentID,
+    bedId,
+    status,
+    admissionInd,
+    admissionName,
+    LeaveType,
+    PayerPlanId,
+    Billable,
+    Hold,
+    EstCompletionDate,
+    LocationToTypeId,
+    LocationId,
+    EvacuationCategoryDescription,
+    startDate,
+    endDate,
+    entityId,
+    IsReadmitted
+FROM (
+    SELECT 
+        date,
+        admissionId,
+        ResidentID,
+        bedId,
+        status,
+        admissionInd,
+        admissionName,
+        -- Select LeaveType and PayerPlanId along with their lengths
+    LeaveType, 
+    length(LeaveType) AS LeaveType_Length, 
+    PayerPlanId, 
+    length(PayerPlanId) AS PayerPlanId_Length,
+        Billable,
+        Hold,
+        EstCompletionDate,
+        LocationToTypeId,
+        LocationId,
+        EvacuationCategoryDescription,
+        startDate,
+        endDate,
+        entityId,
+        IsReadmitted,
+        -- Add a flag to identify rows where length exceeds 25 characters
+        CASE WHEN length(LeaveType) > 1 OR length(PayerPlanId) > 1 THEN 'Exceeds Max Length' ELSE 'Within Max Length' END AS LengthValidation
+    FROM temp_leave
+) AS temp_leave_with_validation
+WHERE length(LeaveType) >=1 OR length(PayerPlanId) >=1;
+
+END;
+$_$
+
+

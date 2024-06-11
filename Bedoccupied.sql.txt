@@ -1,0 +1,35 @@
+CREATE OR REPLACE PROCEDURE dev_acm_pcc.load_bedoccupied_v1()
+ LANGUAGE plpgsql
+AS $$
+BEGIN
+    drop table if exists #temp1;
+
+    -- First, clear the target table
+    TRUNCATE TABLE dev_acm_pcc.bedoccupied;
+
+    CREATE TEMP TABLE #temp1 AS
+    SELECT
+        d.date,
+        CAST(NULLIF(c.bed_id, '') AS INTEGER) AS bedid,
+        1 AS occupied
+    FROM
+        acm_pcc_db.tbl_acm_census_item c
+    JOIN
+        dev_acm_pcc.datetable d
+    ON
+        d.date >= '2021-01-01'
+        AND d.date <= CURRENT_DATE
+        AND d.date >= COALESCE(NULLIF(c.effective_date, ''), '1900-01-01')::DATE
+        AND d.date <= COALESCE(NULLIF(c.ineffective_date, ''), '9999-12-31')::DATE
+    WHERE
+        c.deleted = 'N' AND c.bed_id is not NULL AND c.bed_id != '' AND c.bed_id != -1;  -- or any condition to filter out deleted entries
+
+    -- Insert data into the bedoccupied table
+    INSERT INTO dev_acm_pcc.bedoccupied (bedid, date, occupied)
+    select b.bedid, i.date, occupied from #temp1 i
+    left join dev_acm_pcc.bed b on i.bedid = b.sourceid;
+
+END;
+$$
+
+

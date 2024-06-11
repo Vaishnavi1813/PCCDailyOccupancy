@@ -1,0 +1,71 @@
+CREATE
+OR REPLACE VIEW "dev_acm_pcc"."qs_dailyoccupancy_v2" AS
+SELECT
+    b.dateid,
+    b.date,
+    b.entityname AS campusname,
+    b.entityname AS activecampusname,
+    CASE
+    WHEN b.entitycode:: text = 'WBM':: character varying:: text THEN 'WMB':: character varying
+    WHEN b.entitycode:: text = 'WBT':: character varying:: text THEN 'WPB':: character varying
+    WHEN b.entitycode:: text = 'WPT':: character varying:: text THEN 'WWP':: character varying
+    WHEN b.entitycode:: text = 'WPS':: character varying:: text
+    AND b.entityname:: text = 'Westminster Palms':: character varying:: text THEN 'WPS':: character varying
+    ELSE b.entitycode END AS entitycode,
+    CASE
+    WHEN b.entityabreviation:: text = 'Others':: character varying:: text THEN 'LPC':: character varying
+    ELSE b.entityabreviation END AS entityabreviation,
+    b.entityname,
+    b.levelofcare,
+    b.facilitycode,
+    b.buildingname,
+    b.buildingname AS buildingdescription,
+    b.buildingid,
+    b.datebuildingkey,
+    b.unitname,
+    b.roomid,
+    b.roomname,
+    b.bedname,
+    b.bedid,
+    b.residentdays,
+    b.inservicedays,
+    b.vacant,
+    b.occupancydays,
+    b.vacancydays,
+    b.outofservicedays,
+    b.secondperson,
+    b.outofservice,
+    b.admissionsal AS admissional,
+    b.admissionsil AS admissionil,
+    b.admissionssnf AS admissionsnf,
+    0 AS admissionsecondal,
+    0 AS admissionsecondil,
+    0 AS dischargesal,
+    0 AS dischargesil,
+    0 AS dischargessnf,
+    0 AS secondpersoninservicedays,
+    b.residentdaysbudget,
+    b.inservicedaysbudget,
+    b.issecondperson,
+    CASE
+    WHEN pgdate_part(
+        'month':: character varying:: text,
+        b.date:: timestamp without time zone
+    ) < 4:: double precision THEN date_part_year(
+        date_add(
+            'year':: character varying:: text,
+            - 1:: bigint,
+            b.date:: timestamp without time zone
+        ):: date
+    )
+    ELSE date_part_year(b.date) END AS "fy year",
+    date_part_year(b.date) AS "year",
+    b.date AS "fy date",
+    pgdate_part(
+        'month':: character varying:: text,
+        b.date:: timestamp without time zone
+    ) AS "month",
+    'WCF' AS tenant
+FROM
+    dev_acm_pcc.qs_bedoccupancy_v2 b;
+

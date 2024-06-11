@@ -1,0 +1,66 @@
+CREATE
+OR REPLACE VIEW "dev_acm_pcc"."qs_bedoccupancy_v2" AS
+SELECT
+    DISTINCT dt.dateid,
+    bo.date,
+    vb.campusname,
+    CASE
+    WHEN e.entitycode:: text = 'WBM':: character varying:: text THEN 'WMB':: character varying
+    ELSE e.entitycode END AS entitycode,
+    e.entityabreviation,
+    e.entityname,
+    loc.levelofcareabbreviation AS levelofcare,
+    f.facilitycode,
+    vb.buildingname,
+    vb.buildingid,
+    bo.date:: character(10):: character varying:: text + vb.buildingid:: character varying(100):: text AS datebuildingkey,
+    NULL:: character varying AS unitname,
+    vb.roomid,
+    vb.roomname,
+    vb.bedname,
+    vb.bedid,
+    bo.occupied AS residentdays,
+    bo.available AS inservicedays,
+    bo.vacant,
+    bo.occupancydays,
+    bo.vacancydays,
+    bo.outofservicedays,
+    CASE
+    WHEN bo.available = 1 THEN 0
+    ELSE 1 END AS outofservice,
+    CASE
+    WHEN vb.bedname:: text = 'A':: text THEN 0
+    WHEN vb.bedname:: text = 'B':: text THEN 1
+    ELSE NULL:: integer END AS issecondperson,
+    CASE
+    WHEN vb.bedname:: text = 'A':: text THEN 0
+    WHEN vb.bedname:: text = 'B':: text THEN 1
+    ELSE NULL:: integer END AS secondperson,
+    0 AS admissionsal,
+    0 AS admissionsil,
+    0 AS admissionssnf,
+    fb.residentdaysbudget,
+    fb.inservicedaysbudget
+FROM
+    dev_acm_pcc.bedoccupancy bo
+    JOIN dev_acm_pcc.bed b ON b.bedid = bo.bedid
+    LEFT JOIN dev_acm_pcc.vwbed vb ON vb.bedid = bo.bedid
+    LEFT JOIN dev_acm_pcc.building bld ON bld.buildingid = vb.buildingid
+    LEFT JOIN dev_acm_pcc.levelofcare loc ON loc.levelofcareid = bld.levelofcareid
+    LEFT JOIN dev_acm_pcc.entity e ON e.entityid = vb.entityid
+    JOIN dev_acm_pcc.datetable dt ON dt.date = bo.date
+    LEFT JOIN dev_acm_pcc.pcc_facility f ON f.facilityid = bld.fac_id
+    LEFT JOIN dev_acm_pcc.factbudgetoccupancyperday_v2 fb ON fb.buildingid = bld.buildingid
+    AND fb.entitycode:: text = e.entitycode:: text
+    AND fb.levelofcare:: text = loc.levelofcareabbreviation:: text
+    LEFT JOIN dev_acm_pcc.factbudgetoccupancyperday_v2 fb1 ON fb1.buildingid = bld.buildingid
+    AND fb1.entitycode:: text = e.entitycode:: text
+    AND fb1.levelofcare:: text = loc.levelofcareabbreviation:: text
+WHERE
+    pgdate_part(
+        'year':: character varying:: text,
+        bo.date:: timestamp without time zone
+    ) >= (
+        pgdate_part('year':: character varying:: text, getdate()) - 3:: double precision
+    );
+

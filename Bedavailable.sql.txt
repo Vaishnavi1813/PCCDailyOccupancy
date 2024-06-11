@@ -1,0 +1,160 @@
+CREATE OR REPLACE PROCEDURE dev_acm_pcc.load_bedavailable()
+ LANGUAGE plpgsql
+AS $$
+DECLARE
+    LAST_UPDATED DATE;
+    MAX_DATE DATE;
+    EXISTS_ROWS INT;
+BEGIN
+
+DROP TABLE IF EXISTS #ba;
+
+SELECT date INTO MAX_DATE FROM dev_acm_pcc.datetable ORDER BY date DESC LIMIT 1;
+RAISE INFO 'MAX_DATE: %', MAX_DATE;
+
+SELECT COUNT(*) INTO EXISTS_ROWS FROM dev_acm_pcc.BedAvailable LIMIT 1;
+RAISE INFO 'EXISTS_ROWS: %', EXISTS_ROWS;
+
+IF EXISTS_ROWS = 0 THEN -- if date table is empty set default date
+    LAST_UPDATED := '2024-02-01';
+    RAISE INFO 'LAST_UPDATED (Default Date): %', LAST_UPDATED;
+ELSE -- if date table is not empty select the last inserted date as start date
+    -- Query to get the maximum value from the column "date"
+    -- GET last inserted date
+    SELECT date INTO LAST_UPDATED FROM dev_acm_pcc.BedAvailable ORDER BY date DESC LIMIT 1;
+    RAISE INFO 'LAST_UPDATED (Last Inserted Date): %', LAST_UPDATED;
+END IF;
+
+IF EXISTS_ROWS = 0 THEN
+    CREATE TEMP TABLE #ba AS
+    SELECT
+        dt.Date,
+        bedcampus.bedID,
+        bedcampus.sourceid,
+        false AS available,
+        'ACM' AS tenant
+    FROM
+        (SELECT
+            a.BedID,
+            c.fromdate,
+            c.todate,
+            a.sourceid
+        FROM
+            dev_acm_pcc.bed AS a -- Bed table
+            INNER JOIN dev_acm_pcc.vwBed AS v ON a.BedID = v.BedID -- vwBed table
+            INNER JOIN dev_acm_pcc.facility AS c ON v.facilityID = c.facilityID 
+        WHERE 
+            a.ToDate = '9999-12-31'
+        ) AS bedcampus
+    INNER JOIN dev_acm_pcc.datetable AS dt ON dt."Date" > (SELECT GREATEST('2021-01-01', bedcampus.fromdate)) AND dt."Date" <= (SELECT LEAST('2024-05-17', bedcampus.todate));
+ELSE
+    CREATE TEMP TABLE #ba AS
+    SELECT
+        dt.Date,
+        bedcampus.bedID,
+        bedcampus.sourceid,
+        false AS available,
+        'ACM' AS tenant
+    FROM
+        (SELECT
+            a.BedID,
+            c.fromdate,
+            c.todate,
+            a.sourceid
+        FROM
+            dev_acm_pcc.bed AS a -- Bed table
+            INNER JOIN dev_acm_pcc.vwBed AS v ON a.BedID = v.BedID -- vwBed table
+            INNER JOIN dev_acm_pcc.facility AS c ON v.facilityID = c.facilityID 
+        WHERE 
+            a.ToDate = '9999-12-31'
+        ) AS bedcampus
+    INNER JOIN dev_acm_pcc.datetable AS dt ON dt."Date" > LAST_UPDATED AND dt."Date" <= MAX_DATE;
+END IF;
+
+-- Update all beds as available as 0 if campus is not active
+-- Dates outside campus active dates will be marked as not available
+-- Step 1: Create a CTE for active facilities
+-- WITH active_facilities AS (
+--     SELECT
+--         facilityid,
+--         fromdate,
+--         todate
+--     FROM
+--         dev_acm_pcc.facility
+--     WHERE
+--         todate IS NOT NULL
+-- ),
+
+-- -- Step 2: Create a CTE for non-active dates
+-- non_active_dates AS (
+--     SELECT 
+--         ba.BedID,
+--         ba.date
+--     FROM 
+--         #ba AS ba
+--     LEFT JOIN 
+--         active_facilities AS af 
+--         ON ba.BedID = af.facilityid
+--         AND af.fromdate <= ba."Date"
+--         AND af.todate >= ba."Date"
+--     WHERE
+--         ba.date > LAST_UPDATED
+--         AND af.facilityid IS NULL
+-- )
+
+-- Step 3: Update the available column in #ba
+-- UPDATE #ba
+-- SET available = 0
+-- FROM non_active_dates AS nad
+-- WHERE 
+--     #ba.BedID = nad.BedID
+--     AND #ba.date = nad.date;
+
+-- update inactive beds
+-- Step 1: Create a CTE to identify rows to update
+-- WITH non_available_beds AS (
+-- UPDATE #ba
+-- SET available = 0
+-- WHERE EXISTS (
+--     SELECT 1
+--     FROM 
+--         "acm_pcc_db"."tbl_acm_ods_bed_status" AS tbs
+--     WHERE 
+--         tbs.bed_id = #ba.sourceid
+--         AND status_type = 'I'
+--         AND #ba.date >= effective_date
+--         AND #ba.date <= ineffective_date
+-- )
+-- )
+
+-- Step 2: Update the #ba table
+-- UPDATE #ba
+-- SET available = 0
+-- WHERE 
+--     (BedID, date) IN (SELECT BedID, date FROM non_available_beds);
+
+UPDATE #ba
+SET available = true
+WHERE EXISTS (
+    SELECT 1
+    FROM
+        "acm_pcc_db"."tbl_acm_ods_bed_status" AS tbs
+    WHERE
+        tbs.bed_id = #ba.sourceid
+        AND status_type = 'A'
+        AND #ba.date >= effective_date
+        AND #ba.date <= COALESCE(NULLIF(ineffective_date, ''), '9999-12-31')::DATE
+);
+-- Insert final date into bed available
+MERGE INTO dev_acm_pcc.BedAvailable USING #ba 
+ON #ba.date = dev_acm_pcc.BedAvailable.date and #ba.bedid = dev_acm_pcc.BedAvailable.bedid and dev_acm_pcc.BedAvailable.tenant = 'ACM'
+WHEN MATCHED THEN
+    UPDATE SET tenant = 'ACM'
+WHEN NOT MATCHED THEN
+    INSERT ("Date", BedID, Available, tenant)
+    VALUES (#ba.date, #ba.bedid, #ba.available , #ba.tenant);
+END;
+$$
+
+
+

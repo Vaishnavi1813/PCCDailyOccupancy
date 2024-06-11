@@ -1,0 +1,79 @@
+CREATE OR REPLACE PROCEDURE dev_acm_pcc.load_entity()
+ LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Create a staging table to hold the transformed data
+    CREATE TEMP TABLE staging_entity AS
+WITH unique_entities AS (
+    SELECT
+        CURRENT_DATE AS fromdate,
+        '9999-12-31'::date AS todate,
+        SUBSTRING(facility_code FROM 2) AS entitycode,
+        TRIM(REPLACE(REPLACE(REPLACE(name, 'Residential Living', ''), 'Assisted Living', ''), 'Healthcare Center', '')) AS entityname,
+        UPPER(REGEXP_REPLACE(
+            TRIM(REPLACE(REPLACE(REPLACE(name, 'Residential Living', ''), 'Assisted Living', ''), 'Healthcare Center', '')),
+            '[^A-Z]+', ''
+        )) AS entityabreviation,
+        1 AS lineofbusinessid,
+        true AS isactive,
+        'ACM' AS tenant,
+        ROW_NUMBER() OVER (PARTITION BY TRIM(REPLACE(REPLACE(REPLACE(name, 'Residential Living', ''), 'Assisted Living', ''), 'Healthcare Center', '')) ORDER BY facility_code) AS row_num
+    FROM
+        dev.acm_pcc_db.tbl_acm_facility
+    where entitycode<> ''
+)
+SELECT
+    fromdate,
+    todate,
+    entitycode,
+    entityname,
+    entityabreviation,
+    lineofbusinessid,
+    isactive,
+    tenant
+FROM
+    unique_entities
+WHERE
+    row_num = 1;
+
+    -- Merge data from staging table into the target table
+    MERGE INTO dev.dev_acm_pcc.entity
+    USING staging_entity
+    ON dev.dev_acm_pcc.entity.entitycode = staging_entity.entitycode
+       AND dev.dev_acm_pcc.entity.tenant = staging_entity.tenant
+    WHEN MATCHED THEN
+        UPDATE SET
+            fromdate = staging_entity.fromdate,
+            todate = staging_entity.todate,
+            entityname = staging_entity.entityname,
+            entityabreviation = staging_entity.entityabreviation,
+            lineofbusinessid = staging_entity.lineofbusinessid,
+            isactive = staging_entity.isactive
+    WHEN NOT MATCHED THEN
+        INSERT (
+            fromdate,
+            todate,
+            entitycode,
+            entityname,
+            entityabreviation,
+            lineofbusinessid,
+            isactive,
+            tenant
+        )
+        VALUES (
+            staging_entity.fromdate,
+            staging_entity.todate,
+            staging_entity.entitycode,
+            staging_entity.entityname,
+            staging_entity.entityabreviation,
+            staging_entity.lineofbusinessid,
+            staging_entity.isactive,
+            staging_entity.tenant
+        );
+
+    -- Drop the staging table
+    DROP TABLE staging_entity;
+END;
+$$
+
+

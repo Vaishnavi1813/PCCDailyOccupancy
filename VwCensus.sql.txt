@@ -1,0 +1,56 @@
+CREATE
+OR REPLACE VIEW dev_acm_pcc.view_census AS
+SELECT
+    ci.census_id AS CensusID,
+    ci.fac_id AS FacilityID,
+    ci.client_id AS PatientID,
+    ci.bed_id AS BedID,
+    ci.effective_date AS BeginEffectiveDate,
+    ci.ineffective_date AS EndEffectiveDate,
+    ci.primary_payer_id AS PayerID,
+    cp2.payer_id AS SecondPayerID,
+    cp3.payer_id AS ThirdPayerID,
+    cp4.payer_id AS FourthPayerID,
+    cp5.payer_id AS FifthPayerID,
+    ci.rugs_code AS CareLevelCode,
+    ci.alternate_care_level AS AlternateCareLevelCode,
+    ci.status_code_id AS StatusCodeID,
+    ci.action_code_id AS ActionCodeID,
+    CASE
+    WHEN NULLIF(ci.adt_tofrom_loc_id, '') IS NULL THEN NULL
+    WHEN ci.adt_tofrom_loc_id < 0 THEN CAST(ci.adt_tofrom_loc_id * -1 AS numeric)
+    ELSE CAST(ci.adt_tofrom_loc_id AS numeric) END AS AdmitDischargeLocationID,
+    cc1.item_description AS AdmitDischargeLocation,
+    cc.item_description AS AdmitDischargeLocationType,
+    ci.created_date AS CreatedDate,
+    ci.revision_date AS RevisionDate,
+    ci.outpatient_status AS OutPatientStatus,
+    ci.hospital_stay_from AS HospitalStayFrom,
+    ci.hospital_stay_to AS HospitalStayTo,
+    ci.adt_tofrom_loc_id AS AdmitToFromID,
+    ci.admission_type AS AdmissionType,
+    ci.admission_source AS AdmissionSource,
+    ci.prior_medicare_days AS PriorMedicareDays
+FROM
+    acm_pcc_db.tbl_acm_census_item ci
+    LEFT JOIN acm_pcc_db.tbl_acm_census_payer_info cp2 ON cp2.census_id = ci.census_id
+    AND cp2.payer_rank = 2
+    LEFT JOIN acm_pcc_db.tbl_acm_census_payer_info cp3 ON cp3.census_id = ci.census_id
+    AND cp3.payer_rank = 3
+    LEFT JOIN acm_pcc_db.tbl_acm_census_payer_info cp4 ON cp4.census_id = ci.census_id
+    AND cp4.payer_rank = 4
+    LEFT JOIN acm_pcc_db.tbl_acm_census_payer_info cp5 ON cp5.census_id = ci.census_id
+    AND cp5.payer_rank = 5
+    LEFT JOIN acm_pcc_db.tbl_common_code cc ON cc.item_id = ci.adt_tofrom_id
+    AND cc.item_code = 'admit'
+    LEFT JOIN acm_pcc_db.tbl_common_code cc1 ON cc1.item_id = ci.adt_tofrom_loc_id
+WHERE
+    (
+        ci.deleted IS NULL
+        OR ci.deleted = 'N'
+    )
+    AND (
+        ci.record_type IS NULL
+        OR ci.record_type = 'C'
+    ) WITH NO SCHEMA BINDING;
+

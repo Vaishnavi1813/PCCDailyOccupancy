@@ -1,0 +1,82 @@
+CREATE OR REPLACE PROCEDURE dev_acm_pcc.load_facility()
+ LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Create a temporary table to hold the transformed data
+    CREATE TEMP TABLE tempfacility AS 
+    SELECT 
+        name AS facilityname,
+        SUBSTRING(facility_code FROM 2) AS entitycode,
+        facility_code,
+        UPPER(REGEXP_REPLACE(name, '[^A-Z]+', '')) AS facilityabbreviation,
+        af.fac_id:: INTEGER as sourceid,
+        af.created_date 
+    FROM 
+        dev.acm_pcc_db.tbl_acm_facility af
+    WHERE 
+        facility_code <> '';
+
+    -- Select data from the temporary table and join with entity table
+    CREATE TEMP TABLE staging_facility AS
+    SELECT 
+        tempfacility.facilityname,
+        tempfacility.entitycode,
+        tempfacility.facility_code,
+        tempfacility.facilityabbreviation,
+        entity.entityid,
+        tempfacility.sourceid,
+        tempfacility.created_date:: date AS fromdate,
+        '9999-12-31'::date AS todate,
+        TRUE AS isactive,
+        'ACM' AS tenant
+    FROM  
+        tempfacility
+    LEFT JOIN 
+        dev_acm_pcc.entity 
+    ON 
+        tempfacility.entitycode = dev_acm_pcc.entity.entitycode;
+
+    -- Merge data from staging table into the target table
+    MERGE INTO dev_acm_pcc.pcc_facility
+    USING staging_facility
+    ON dev_acm_pcc.pcc_facility.facilitycode = staging_facility.facility_code
+       AND dev_acm_pcc.pcc_facility.entityid = staging_facility.entityid
+       AND dev_acm_pcc.pcc_facility.tenant = staging_facility.tenant
+    WHEN MATCHED THEN
+        UPDATE SET
+            fromdate = staging_facility.fromdate,
+            todate = staging_facility.todate,
+            facilityname = staging_facility.facilityname,
+            facilityabbreviation = staging_facility.facilityabbreviation,
+            isactive = staging_facility.isactive
+    WHEN NOT MATCHED THEN
+        INSERT (
+            fromdate,
+            todate,
+            facilitycode,
+            facilityname,
+            facilityabbreviation,
+            entityid,
+            sourceid,
+            isactive,
+            tenant
+        )
+        VALUES (
+            staging_facility.fromdate,
+            staging_facility.todate,
+            staging_facility.facility_code,
+            staging_facility.facilityname,
+            staging_facility.facilityabbreviation,
+            staging_facility.entityid,
+            staging_facility.sourceid,
+            staging_facility.isactive,
+            staging_facility.tenant
+        );
+
+    -- Drop the temporary tables
+    DROP TABLE IF EXISTS tempfacility;
+    DROP TABLE IF EXISTS staging_facility;
+END;
+$$
+
+

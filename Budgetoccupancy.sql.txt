@@ -1,0 +1,44 @@
+CREATE OR REPLACE PROCEDURE dev_acm_pcc.load_budgetoccupancy_data()
+ LANGUAGE plpgsql
+AS $$
+BEGIN
+
+    Truncate table dev_acm_pcc.budgetoccupancy;
+
+    INSERT INTO dev_acm_pcc.budgetoccupancy(
+        startdate,
+        enddate,
+        entityid,
+        facilityid,
+        buildingid,
+        budgetavailableperday,
+        budgetresidentdaysperday,
+        budgetavailable,
+        budgetresidentdays
+    )
+    SELECT 
+        TO_DATE(bo.startdate, 'DD-MM-YYYY'),
+        TO_DATE(bo.enddate, 'DD-MM-YYYY'),
+        e.entityid::integer,
+        f.facilityid,
+        b.buildingid,
+        CAST(REPLACE(bo.budgetavailableperday, ',', '') AS DECIMAL(18,4)),
+        CAST(REPLACE(bo.budgetresidentdaysperday, ',', '') AS DECIMAL(18,4)),
+        CASE 
+            WHEN CAST(REPLACE(bo.budgetavailableperday, ',', '') AS DECIMAL(18,4)) = 0 THEN 0 
+            ELSE CAST(REPLACE(bo.budgetavailableperday, ',', '') AS DECIMAL(18,4)) * (DATEDIFF(day, TO_DATE(bo.startdate, 'DD-MM-YYYY'), TO_DATE(bo.enddate, 'DD-MM-YYYY')) + 1)
+        END,
+        CASE 
+            WHEN CAST(REPLACE(bo.budgetresidentdaysperday, ',', '') AS DECIMAL(18,4)) = 0 THEN 0 
+            ELSE CAST(REPLACE(bo.budgetresidentdaysperday, ',', '') AS DECIMAL(18,4)) * (DATEDIFF(day, TO_DATE(bo.startdate, 'DD-MM-YYYY'), TO_DATE(bo.enddate, 'DD-MM-YYYY')) + 1)
+        END
+    FROM "dev"."dev_static_acm_default_db"."budget_occupancy_perday" bo
+    INNER JOIN dev_acm_pcc.entity e ON e.entityname = bo.entityname
+    INNER JOIN dev_acm_pcc.pcc_facility f ON f.facilityname = bo.facilityname
+    INNER JOIN dev_acm_pcc.building b ON b.fac_id = f.facilityid
+    INNER JOIN dev_acm_pcc.levelofcare loc ON b.levelofcareid = loc.levelofcareid;
+END;
+$$;
+
+
+call dev_acm_pcc.load_budgetoccupancy_data();
